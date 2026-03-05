@@ -265,7 +265,7 @@ class ClaudeSDKManager:
         """
         if isinstance(exc, CLIConnectionError):
             msg = str(exc).lower()
-            return "mcp" not in msg and "server" not in msg
+            return "mcp" not in msg  # "server" alone is too broad
         return False
 
     async def execute_command(
@@ -403,7 +403,6 @@ class ClaudeSDKManager:
 
             # Execute with timeout and retry, racing against optional interrupt
             max_attempts = max(1, self.config.claude_retry_max_attempts)
-            last_exc: Optional[BaseException] = None
 
             for attempt in range(max_attempts):
                 if attempt > 0:
@@ -458,7 +457,6 @@ class ClaudeSDKManager:
                     raise  # timeout — don't retry
                 except CLIConnectionError as exc:
                     if self._is_retryable_error(exc) and attempt < max_attempts - 1:
-                        last_exc = exc
                         logger.warning(
                             "Transient connection error, will retry",
                             attempt=attempt + 1,
