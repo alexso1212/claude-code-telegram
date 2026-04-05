@@ -1168,6 +1168,85 @@ class TestClaudeMdLoading:
         assert "Use relative paths." in opts.system_prompt
         assert "# Project Rules" not in opts.system_prompt
 
+    async def test_partial_messages_not_counted_as_turns(self, sdk_manager):
+        """Regression: partial AssistantMessages (stop_reason=None) must NOT
+        count toward max_turns. Only complete messages (stop_reason set) count.
+
+        Before the fix, streaming partials were counted, causing the bot to
+        interrupt after just a few partial snapshots within a single real turn.
+        """
+        # 10 partial messages (stop_reason=None) + 1 complete + result
+        partials = [
+            AssistantMessage(
+                content=[TextBlock(text=f"partial {i}")],
+                model="claude-sonnet-4-20250514",
+                # stop_reason defaults to None — this is a partial/streaming snapshot
+            )
+            for i in range(10)
+        ]
+        complete = AssistantMessage(
+            content=[TextBlock(text="final")],
+            model="claude-sonnet-4-20250514",
+            stop_reason="end_turn",
+        )
+        result = _make_result_message()
+
+        client = _mock_client(*partials, complete, result)
+
+        with patch(
+            "src.claude.sdk_integration.ClaudeSDKClient", return_value=client
+        ):
+            response = await sdk_manager.execute_command(
+                prompt="Test prompt",
+                working_directory=Path("/test"),
+            )
+
+        # Should complete normally — not interrupted by max_turns (default 5)
+        assert not response.is_error
+        # interrupt() should NOT have been called
+        client.interrupt.assert_not_called()
+
+    async def test_complete_messages_counted_as_turns(self, tmp_path):
+        """Complete AssistantMessages (stop_reason set) ARE counted as turns.
+        With max_turns=2, the 2nd complete message should trigger interrupt.
+        """
+        config = Settings(
+            telegram_bot_token="test:token",
+            telegram_bot_username="testbot",
+            approved_directory=tmp_path,
+            claude_timeout_seconds=2,
+            enable_mcp=False,
+            claude_max_turns=2,
+        )
+        manager = ClaudeSDKManager(config)
+
+        messages = [
+            AssistantMessage(
+                content=[TextBlock(text="turn 1")],
+                model="claude-sonnet-4-20250514",
+                stop_reason="tool_use",
+            ),
+            AssistantMessage(
+                content=[TextBlock(text="turn 2")],
+                model="claude-sonnet-4-20250514",
+                stop_reason="end_turn",
+            ),
+            _make_result_message(),
+        ]
+
+        client = _mock_client(*messages)
+
+        with patch(
+            "src.claude.sdk_integration.ClaudeSDKClient", return_value=client
+        ):
+            await manager.execute_command(
+                prompt="Test prompt",
+                working_directory=Path("/test"),
+            )
+
+        # interrupt() SHOULD have been called after 2nd complete message
+        client.interrupt.assert_called_once()
+
     async def test_setting_sources_includes_project(self, sdk_manager, tmp_path):
         """setting_sources=['project'] is passed to ClaudeAgentOptions."""
         captured: list = []

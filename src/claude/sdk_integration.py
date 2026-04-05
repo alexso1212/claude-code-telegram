@@ -319,6 +319,12 @@ class ClaudeSDKManager:
                 sdk_disallowed_tools = self.config.claude_disallowed_tools
 
             # Build Claude Agent options
+            logger.info(
+                "Claude config values",
+                claude_max_turns=self.config.claude_max_turns,
+                claude_timeout=self.config.claude_timeout_seconds,
+                claude_max_cost_per_request=self.config.claude_max_cost_per_request,
+            )
             options = ClaudeAgentOptions(
                 max_turns=self.config.claude_max_turns,
                 model=self.config.claude_model or None,
@@ -365,6 +371,7 @@ class ClaudeSDKManager:
             # Collect messages via ClaudeSDKClient
             messages: List[Message] = []
             interrupted = False
+            max_turns = self.config.claude_max_turns
 
             async def _run_client() -> None:
                 client = ClaudeSDKClient(options)
@@ -402,6 +409,7 @@ class ClaudeSDKManager:
                     else:
                         await client.query(prompt)
 
+                    turn_count = 0
                     async for raw_data in client._query.receive_messages():
                         try:
                             message = parse_message(raw_data)
@@ -417,18 +425,36 @@ class ClaudeSDKManager:
                         if isinstance(message, ResultMessage):
                             break
 
+                        # Count assistant turns for max_turns enforcement
+                        # (CLI --max-turns is unsupported in bundled CLI)
+                        # Only count complete messages (stop_reason is set),
+                        # not partial streaming snapshots
+                        if isinstance(message, AssistantMessage) and message.stop_reason is not None:
+                            turn_count += 1
+                            if max_turns and turn_count >= max_turns:
+                                logger.warning(
+                                    "Max turns reached, interrupting",
+                                    turn_count=turn_count,
+                                    max_turns=max_turns,
+                                )
+                                await client.interrupt()
+
                         # Handle streaming callback
                         if stream_callback:
                             try:
                                 await self._handle_stream_message(
                                     message, stream_callback
                                 )
+                            except asyncio.CancelledError:
+                                raise  # Propagate cancellation/interrupts
                             except Exception as callback_error:
                                 logger.warning(
-                                    "Stream callback failed",
+                                    "Stream callback error (continuing anyway)",
                                     error=str(callback_error),
                                     error_type=type(callback_error).__name__,
+                                    stream_message_type=getattr(message, "type", "unknown"),
                                 )
+                                # Continue processing - callback failure should not stop SDK
                 finally:
                     await client.disconnect()
 
@@ -472,10 +498,13 @@ class ClaudeSDKManager:
 
                 # Note: asyncio.TimeoutError is intentionally NOT retried —
                 # it reflects a user-configured hard limit.
+                # timeout=0 means no limit (for long-running tasks like
+                # batch video editing that may run for hours/days).
+                timeout = self.config.claude_timeout_seconds or None
                 try:
                     await asyncio.wait_for(
                         asyncio.shield(run_task),
-                        timeout=self.config.claude_timeout_seconds,
+                        timeout=timeout,
                     )
                     break  # success — exit retry loop
                 except asyncio.CancelledError:

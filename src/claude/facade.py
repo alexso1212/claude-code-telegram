@@ -100,6 +100,8 @@ class ClaudeIntegration:
                         "Session resume failed, starting fresh session",
                         failed_session_id=claude_session_id,
                         error=str(resume_error),
+                        error_type=type(resume_error).__name__,
+                        action="creating_new_session",
                     )
                     # Clean up the stale session
                     await self.session_manager.remove_session(session.session_id)

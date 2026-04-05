@@ -1067,6 +1067,13 @@ class MessageOrchestrator:
             ]
         finally:
             heartbeat.cancel()
+            if isinstance(heartbeat, asyncio.Task):
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(heartbeat), timeout=0.5
+                    )
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
             self._active_requests.pop(user_id, None)
             if draft_streamer:
                 try:
@@ -1337,6 +1344,13 @@ class MessageOrchestrator:
             logger.error("Claude file processing failed", error=str(e), user_id=user_id)
         finally:
             heartbeat.cancel()
+            if isinstance(heartbeat, asyncio.Task):
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(heartbeat), timeout=0.5
+                    )
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
 
     async def agentic_photo(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -1477,6 +1491,13 @@ class MessageOrchestrator:
             )
         finally:
             heartbeat.cancel()
+            if isinstance(heartbeat, asyncio.Task):
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(heartbeat), timeout=0.5
+                    )
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
 
         if force_new:
             context.user_data["force_new_session"] = False
